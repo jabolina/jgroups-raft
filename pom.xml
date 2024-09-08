@@ -28,6 +28,8 @@
         <leveldbjni.version>1.8</leveldbjni.version>
         <log4j.version>2.24.1</log4j.version>
         <jmh.version>1.37</jmh.version>
+        <hyperfoil.version>0.26</hyperfoil.version>
+        <version.metainf-services>1.8</version.metainf-services>
         <mashona.version>1.1.0</mashona.version>
 
         <conf.dir>${project.basedir}/conf</conf.dir>
@@ -220,12 +222,6 @@
         </dependency>
         <dependency>
             <groupId>org.openjdk.jmh</groupId>
-            <artifactId>jmh-core</artifactId>
-            <version>${jmh.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.openjdk.jmh</groupId>
             <artifactId>jmh-generator-annprocess</artifactId>
             <version>${jmh.version}</version>
             <scope>test</scope>
@@ -235,6 +231,30 @@
             <artifactId>assertj-core</artifactId>
             <version>${assertj.version}</version>
             <scope>test</scope>
+        </dependency>
+
+        <!-- Test benchmark dependencies -->
+        <dependency>
+            <groupId>org.openjdk.jmh</groupId>
+            <artifactId>jmh-core</artifactId>
+            <version>${jmh.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.hyperfoil</groupId>
+            <artifactId>hyperfoil-core</artifactId>
+            <version>${hyperfoil.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.hyperfoil</groupId>
+            <artifactId>hyperfoil-api</artifactId>
+            <version>${hyperfoil.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.kohsuke.metainf-services</groupId>
+            <artifactId>metainf-services</artifactId>
+            <optional>true</optional>
+            <version>${version.metainf-services}</version>
         </dependency>
     </dependencies>
 

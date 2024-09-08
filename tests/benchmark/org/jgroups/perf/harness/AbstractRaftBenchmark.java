@@ -14,6 +14,7 @@ import org.jgroups.blocks.RpcDispatcher;
 import org.jgroups.conf.ClassConfigurator;
 import org.jgroups.perf.CommandLineOptions;
 import org.jgroups.perf.counter.HistogramUtil;
+import org.jgroups.perf.harness.hyperfoil.config.RaftPluginBuilder;
 import org.jgroups.protocols.TP;
 import org.jgroups.protocols.raft.RAFT;
 import org.jgroups.tests.perf.PerfUtil;
@@ -35,6 +36,8 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+import io.hyperfoil.api.config.Benchmark;
+import io.hyperfoil.api.config.BenchmarkBuilder;
 import org.HdrHistogram.AbstractHistogram;
 import org.HdrHistogram.Histogram;
 
@@ -144,6 +147,14 @@ public abstract class AbstractRaftBenchmark implements Receiver {
 
         System.out.printf("Connecting benchmark node to cluster: '%s'%n", CLUSTER_NAME);
         channel.connect(CLUSTER_NAME);
+
+        BenchmarkBuilder benchmark = BenchmarkBuilder.builder()
+                .name("raft-benchmark")
+                .failurePolicy(Benchmark.FailurePolicy.CANCEL);
+
+        benchmark.addPlugin(RaftPluginBuilder::new)
+                .withStateMachine()
+                .withJChannel(channel);
     }
 
     public final void init() throws Throwable {
