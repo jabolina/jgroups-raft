@@ -3,13 +3,12 @@ package org.jgroups.perf.replication;
 import org.jgroups.annotations.Property;
 import org.jgroups.perf.CommandLineOptions;
 import org.jgroups.perf.harness.AbstractRaftBenchmark;
-import org.jgroups.perf.harness.RaftBenchmark;
 import org.jgroups.perf.harness.hyperfoil.internal.RaftBenchmarkStepBuilder;
 import org.jgroups.protocols.raft.RAFT;
 import org.jgroups.raft.RaftHandle;
 import org.jgroups.raft.StateMachine;
 import org.jgroups.raft.testfwk.RaftTestUtils;
-import org.jgroups.util.ThreadFactory;
+import org.jgroups.tests.DummyStateMachine;
 import org.jgroups.util.Util;
 
 import java.io.DataInput;
@@ -61,23 +60,15 @@ public class ReplicationPerf extends AbstractRaftBenchmark {
     }
 
     @Override
-    public RaftBenchmark syncBenchmark(ThreadFactory tf) {
-        visitRaftBeforeBenchmark();
-        return new SyncReplicationBenchmark(num_threads, raft, createTestPayload(), tf);
-    }
-
-    @Override
-    public RaftBenchmark asyncBenchmark(ThreadFactory tf) {
-        visitRaftBeforeBenchmark();
-        return new AsyncReplicationBenchmark(num_threads, raft, createTestPayload(), tf);
-    }
-
-    @Override
     public StepBuilder<?> createBenchmarkStep() {
-        byte[] datum = new byte[data_size];
-        ThreadLocalRandom.current().nextBytes(datum);
+        visitRaftBeforeBenchmark();
         return new RaftBenchmarkStepBuilder()
-                .payloadGenerator(ignore -> datum);
+                .payloadGenerator(ignore -> createTestPayload());
+    }
+
+    @Override
+    public StateMachine getBenchmarkStateMachine() {
+        return new DummyStateMachine();
     }
 
     @Override

@@ -33,6 +33,7 @@ public enum HistogramUtil {
         try (FileOutputStream out = new FileOutputStream(file)) {
             //change scale from nanos -> micros
             histogram.outputPercentileDistribution(new PrintStream(out), 1000.0);
+            out.flush();
         }
     }
 }

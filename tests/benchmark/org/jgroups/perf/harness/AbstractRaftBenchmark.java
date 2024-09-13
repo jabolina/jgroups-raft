@@ -13,29 +13,25 @@ import org.jgroups.blocks.ResponseMode;
 import org.jgroups.blocks.RpcDispatcher;
 import org.jgroups.conf.ClassConfigurator;
 import org.jgroups.perf.CommandLineOptions;
+import org.jgroups.perf.counter.HistogramUtil;
 import org.jgroups.perf.harness.hyperfoil.config.RaftPluginBuilder;
-import org.jgroups.protocols.TP;
 import org.jgroups.protocols.raft.RAFT;
-import org.jgroups.tests.DummyStateMachine;
+import org.jgroups.raft.StateMachine;
 import org.jgroups.tests.perf.PerfUtil;
 import org.jgroups.util.Bits;
-import org.jgroups.util.DefaultThreadFactory;
 import org.jgroups.util.Rsp;
 import org.jgroups.util.RspList;
 import org.jgroups.util.Streamable;
 import org.jgroups.util.ThreadFactory;
 import org.jgroups.util.Util;
 
-import java.io.ByteArrayOutputStream;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
-import java.io.PrintStream;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -69,7 +65,7 @@ import org.HdrHistogram.Histogram;
  */
 public abstract class AbstractRaftBenchmark implements Receiver {
 
-    protected static final Field NUM_THREADS, TIME, TIMEOUT, PRINT_INVOKERS, PRINT_DETAILS, BENCHMARK;
+    protected static final Field REQ_PER_SEC, TIME, PRINT_DETAILS;
     private static final Method[] METHODS = new Method[4];
     private static final short START = 0;
     private static final short GET_CONFIG = 1;
@@ -77,9 +73,8 @@ public abstract class AbstractRaftBenchmark implements Receiver {
     private static final short QUIT_ALL = 3;
     private static final String CLUSTER_NAME;
     private static final String BASE_EVENT_LOOP =
-            "[1] Start test [2] View [4] Threads (%d) [6] Time (%s)" +
-                    "\n[t] incr timeout (%s) [d] details (%b)  [i] print updaters (%b)" +
-                    "\n[b] benchmark mode (%s) [v] Version" +
+            "[1] Start test [2] View [4] Req/s (%d) [6] Time (%s)" +
+                    "\n[d] details (%b)  [v] Version" +
                     "\n%s" +
                     "\n[x] Exit [X] Exit all";
 
@@ -90,12 +85,9 @@ public abstract class AbstractRaftBenchmark implements Receiver {
             METHODS[SET] = AbstractRaftBenchmark.class.getMethod("set", String.class, Object.class);
             METHODS[QUIT_ALL] = AbstractRaftBenchmark.class.getMethod("quitAll");
 
-            NUM_THREADS = Util.getField(AbstractRaftBenchmark.class, "num_threads", true);
+            REQ_PER_SEC = Util.getField(AbstractRaftBenchmark.class, "req_per_sec", true);
             TIME = Util.getField(AbstractRaftBenchmark.class, "time", true);
-            TIMEOUT = Util.getField(AbstractRaftBenchmark.class, "timeout", true);
-            PRINT_INVOKERS = Util.getField(AbstractRaftBenchmark.class, "print_updaters", true);
             PRINT_DETAILS = Util.getField(AbstractRaftBenchmark.class, "print_details", true);
-            BENCHMARK = Util.getField(AbstractRaftBenchmark.class, "benchmark", true);
 
             PerfUtil.init();
             ClassConfigurator.addIfAbsent((short) 1050, UpdateResult.class);
@@ -108,26 +100,16 @@ public abstract class AbstractRaftBenchmark implements Receiver {
 
     protected final JChannel channel;
     private final String histogramPath;
-    private final ThreadFactory threadFactory;
     private final RpcDispatcher disp;
 
     @Property
-    protected int num_threads = 100;
+    protected int req_per_sec = 100;
 
     @Property
     protected int time = 30; // in seconds
 
     @Property
-    protected boolean print_updaters;
-
-    @Property
     protected boolean print_details;
-
-    @Property
-    protected long timeout = 60_000; // ms
-
-    @Property
-    protected String benchmark = "sync";
 
     private volatile boolean looping = true;
 
@@ -137,15 +119,6 @@ public abstract class AbstractRaftBenchmark implements Receiver {
             System.out.printf("Histogram enabled! Storing in '%s'%n", histogramPath);
 
         this.channel = new JChannel(cmd.getProps()).name(cmd.getName());
-
-        TP transport = channel.getProtocolStack().getTransport();
-        boolean useVirtualThreads = transport.useVirtualThreads();
-
-        threadFactory = new DefaultThreadFactory("replication-updater", false, true)
-                .useVirtualThreads(useVirtualThreads);
-        if (useVirtualThreads && Util.virtualThreadsAvailable())
-            System.out.println("Utilizing virtual threads for benchmark!");
-
         RAFT raft = channel.getProtocolStack().findProtocol(RAFT.class);
         raft.raftId(cmd.getName());
         raft.addRoleListener(role -> System.out.printf("%s: role is '%s'%n", channel.getAddress(), role));
@@ -180,8 +153,8 @@ public abstract class AbstractRaftBenchmark implements Receiver {
 
     public final void eventLoop() throws Throwable {
         while (looping) {
-            String message = String.format(BASE_EVENT_LOOP, num_threads, Util.printTime(time, TimeUnit.SECONDS),
-                    Util.printTime(timeout, TimeUnit.MILLISECONDS), print_details, print_updaters, benchmark, extendedEventLoopHeader());
+            String message = String.format(BASE_EVENT_LOOP, req_per_sec, Util.printTime(time, TimeUnit.SECONDS),
+                    print_details, extendedEventLoopHeader());
             int c = Util.keyPress(message);
 
             switch (c) {
@@ -192,22 +165,13 @@ public abstract class AbstractRaftBenchmark implements Receiver {
                     System.out.printf("\n-- local: %s, view: %s\n", channel.getAddress(), channel.getView());
                     break;
                 case '4':
-                    changeFieldAcrossCluster(NUM_THREADS, Util.readIntFromStdin("Number of updater threads: "));
+                    changeFieldAcrossCluster(REQ_PER_SEC, Util.readIntFromStdin("Number of req/sec/node: "));
                     break;
                 case '6':
                     changeFieldAcrossCluster(TIME, Util.readIntFromStdin("Time (secs): "));
                     break;
                 case 'd':
                     changeFieldAcrossCluster(PRINT_DETAILS, !print_details);
-                    break;
-                case 'i':
-                    changeFieldAcrossCluster(PRINT_INVOKERS, !print_updaters);
-                    break;
-                case 't':
-                    changeFieldAcrossCluster(TIMEOUT, Util.readIntFromStdin("update timeout (ms): "));
-                    break;
-                case 'b':
-                    changeFieldAcrossCluster(BENCHMARK, Util.readStringFromStdin("benchmark mode: "));
                     break;
                 case 'v':
                     System.out.printf("Version: %s, Java version: %s\n", Version.printVersion(),
@@ -244,14 +208,16 @@ public abstract class AbstractRaftBenchmark implements Receiver {
 
         BenchmarkBuilder builder = BenchmarkBuilder.builder()
                 .name("raft-benchmark")
+                .threads(Runtime.getRuntime().availableProcessors())
                 .failurePolicy(Benchmark.FailurePolicy.CANCEL);
 
+        StateMachine sm = getBenchmarkStateMachine();
         builder.addPlugin(RaftPluginBuilder::new)
-                .withStateMachine(new DummyStateMachine())
+                .withStateMachine(sm)
                 .withJChannel(channel);
 
-        PhaseBuilder<?> pb = builder.addPhase(benchmark)
-                .constantRate(num_threads)
+        PhaseBuilder<?> pb = builder.addPhase("benchmark")
+                .constantRate(req_per_sec)
                 .duration(TimeUnit.SECONDS.toMillis(time))
                 .maxDuration(TimeUnit.SECONDS.toMillis(time))
                 .isWarmup(false);
@@ -262,10 +228,11 @@ public abstract class AbstractRaftBenchmark implements Receiver {
                 .endSequence()
                 .endScenario();
 
-        HashMap<String, StatisticsSnapshot> total = new HashMap<>();
+        final StatisticsSnapshot stats = new StatisticsSnapshot();
+        Benchmark b = builder.build();
         LocalSimulationRunner runner = new LocalSimulationRunner(
-                builder.build(),
-                (phase, stepId, metric, snapshot, countDown) -> total.computeIfAbsent(phase.name() + "/" + metric, k -> new StatisticsSnapshot()).add(snapshot),
+                b,
+                (phase, stepId, metric, snapshot, countDown) -> stats.add(snapshot),
                 (phase, min, max) -> System.out.printf("Phase %s used %s - %s sessions.%n", phase, min, max),
                 (authority, tag, min, max) -> {});
 
@@ -273,10 +240,25 @@ public abstract class AbstractRaftBenchmark implements Receiver {
             runner.run();
         } catch (Throwable t) {
             t.printStackTrace(System.err);
+            throw t;
         }
 
-        StatisticsSnapshot stats = total.values().stream().findFirst().orElseThrow();
+        if (histogramPath != null) {
+            String fileName = String.format("histogram_%s_%s.hgrm", channel.getName(), sm.getClass().getSimpleName());
+            Path filePath = Path.of(histogramPath, fileName);
+
+            System.out.printf("Storing histogram to '%s'%n", filePath.toAbsolutePath());
+            try {
+                HistogramUtil.writeTo(stats.histogram, filePath.toFile());
+            } catch (IOException e) {
+                System.err.printf("Failed writing histogram: %s", e);
+            }
+        }
+
         long durationSeconds = (stats.histogram.getEndTimeStamp() - stats.histogram.getStartTimeStamp());
+        System.out.printf("Run for %d sec%n", durationSeconds);
+        System.out.printf("Use %d threads%n", b.defaultThreads());
+
         return new UpdateResult(stats.histogram.getTotalCount(), durationSeconds, stats.histogram);
     }
 
@@ -316,33 +298,9 @@ public abstract class AbstractRaftBenchmark implements Receiver {
         Util.close(channel);
     }
 
-    private RaftBenchmark getBenchmark(String type) {
-        if (type.equals("sync"))
-            return syncBenchmark(threadFactory);
-
-        if (type.equals("async"))
-            return asyncBenchmark(threadFactory);
-
-        throw new IllegalArgumentException(String.format("Benchmark %s not found!", benchmark));
-    }
-
-    /**
-     * Creates a new instance of the {@link RaftBenchmark} with synchronous APIs.
-     *
-     * @param tf: Factory to create threads.
-     * @return A new benchmark instance.
-     */
-    public abstract RaftBenchmark syncBenchmark(ThreadFactory tf);
-
-    /**
-     * Creates a new instance of the {@link RaftBenchmark} with asynchronous APIs.
-     *
-     * @param tf: Factory to create threads.
-     * @return A new benchmark instance.
-     */
-    public abstract RaftBenchmark asyncBenchmark(ThreadFactory tf);
-
     public abstract StepBuilder<?> createBenchmarkStep();
+
+    public abstract StateMachine getBenchmarkStateMachine();
 
     /**
      * Expand the event loop with new arguments.
@@ -415,53 +373,27 @@ public abstract class AbstractRaftBenchmark implements Receiver {
         disp.callRemoteMethods(null, new MethodCall(SET, field.getName(), value), RequestOptions.SYNC());
     }
 
-    private static String printAverage(long start_time, RaftBenchmark benchmark) {
-        long tmp_time = System.currentTimeMillis() - start_time;
-        long incrs = benchmark.getTotalUpdates();
-        double incrs_sec = incrs / (tmp_time / 1000.0);
-        return String.format("%,.0f updates/sec (%,d updates)", incrs_sec, incrs);
-    }
-
     private static String print(AbstractHistogram histogram, boolean details) {
         if (histogram == null) return "no results";
 
         double avg = histogram.getMean();
-        return details ? String.format("min/avg/max = %d/%f/%s", histogram.getMinValue(), avg, histogram.getMaxValue()) :
-                String.format("%s", Util.printTime(avg, TimeUnit.NANOSECONDS));
+        return details
+                ? String.format("min/avg/max = %s/%s/%s",
+                    Util.printTime(histogram.getMinValue(), TimeUnit.NANOSECONDS),
+                    Util.printTime(avg, TimeUnit.NANOSECONDS),
+                    Util.printTime(histogram.getMaxValue(), TimeUnit.NANOSECONDS))
+                : String.format("%s", Util.printTime(avg, TimeUnit.NANOSECONDS));
     }
 
     private static String printDetailed(AbstractHistogram histogram) {
         StringBuilder sb = new StringBuilder();
-        sb.append("min/avg/max = ");
-        sb.append(Util.printTime(histogram.getMinValue(), TimeUnit.NANOSECONDS)).append('/')
-                .append(Util.printTime(histogram.getMean(), TimeUnit.NANOSECONDS)).append('/')
-                .append(Util.printTime(histogram.getMaxValue(), TimeUnit.NANOSECONDS));
-
-        sb.append(System.lineSeparator());
-
-        sb.append("p50: ").append(Util.printTime(histogram.getValueAtPercentile(50), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
-        sb.append("p90: ").append(Util.printTime(histogram.getValueAtPercentile(90), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
-        sb.append("p99: ").append(Util.printTime(histogram.getValueAtPercentile(99), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
-        sb.append("p99.9: ").append(Util.printTime(histogram.getValueAtPercentile(99.9), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
+        sb.append("p50:    ").append(Util.printTime(histogram.getValueAtPercentile(50), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
+        sb.append("p90:    ").append(Util.printTime(histogram.getValueAtPercentile(90), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
+        sb.append("p99:    ").append(Util.printTime(histogram.getValueAtPercentile(99), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
+        sb.append("p99.9:  ").append(Util.printTime(histogram.getValueAtPercentile(99.9), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
         sb.append("p99.99: ").append(Util.printTime(histogram.getValueAtPercentile(99.99), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
-        sb.append(Util.bold("max: ")).append(Util.printTime(histogram.getMaxValue(), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
+        sb.append(Util.bold("max:    ")).append(Util.printTime(histogram.getMaxValue(), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
         return sb.toString();
-    }
-
-    private void printStats(String phaseAndMetric, StatisticsSnapshot stats) {
-        double durationSeconds = (stats.histogram.getEndTimeStamp() - stats.histogram.getStartTimeStamp()) / 1000d;
-        System.out.println(phaseAndMetric);
-        System.out.printf("%s requests in %s s, %n", stats.histogram.getTotalCount(), durationSeconds);
-        System.out.println("                  Avg     Stdev       Max");
-        System.out.printf("Latency:    %s %s %s%n", io.hyperfoil.impl.Util.prettyPrintNanosFixed((long) stats.histogram.getMean()),
-                io.hyperfoil.impl.Util.prettyPrintNanosFixed((long) stats.histogram.getStdDeviation()),
-                io.hyperfoil.impl.Util.prettyPrintNanosFixed(stats.histogram.getMaxValue()));
-        System.out.printf("Requests/sec: %s%n", String.format("%.2f", stats.histogram.getTotalCount() / durationSeconds));
-
-        final ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        stats.histogram.outputPercentileDistribution(new PrintStream(baos, true, StandardCharsets.UTF_8), 1000.00);
-        String data = baos.toString(StandardCharsets.UTF_8);
-        System.out.printf("\nPercentile Distribution\n\n%s\n", data);
     }
 
     public static class UpdateResult implements Streamable {
