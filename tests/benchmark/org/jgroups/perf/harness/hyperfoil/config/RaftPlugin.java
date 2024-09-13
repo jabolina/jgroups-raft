@@ -1,5 +1,7 @@
 package org.jgroups.perf.harness.hyperfoil.config;
 
+import org.jgroups.perf.harness.hyperfoil.RaftHyperfoilRunner;
+
 import io.hyperfoil.api.config.Benchmark;
 import io.hyperfoil.api.config.BenchmarkBuilder;
 import io.hyperfoil.api.config.PluginConfig;
@@ -33,6 +35,6 @@ public class RaftPlugin implements Plugin {
 
     @Override
     public PluginRunData createRunData(Benchmark benchmark, EventLoop[] eventLoops, int i) {
-        return null;
+        return new RaftHyperfoilRunner(benchmark, eventLoops);
     }
 }

@@ -10,8 +10,10 @@ import java.io.DataOutput;
  * @since  1.0.5
  */
 public class DummyStateMachine implements StateMachine {
+    private static final byte[] DATUM = {};
+
     public byte[] apply(byte[] data, int offset, int length, boolean serialize_response) throws Exception {
-        return serialize_response? new byte[0] : null;
+        return serialize_response? DATUM : null;
     }
     public void readContentFrom(DataInput in) throws Exception {}
     public void writeContentTo(DataOutput out) throws Exception {}

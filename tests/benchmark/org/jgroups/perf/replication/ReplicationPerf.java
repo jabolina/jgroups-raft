@@ -1,9 +1,10 @@
 package org.jgroups.perf.replication;
 
 import org.jgroups.annotations.Property;
-import org.jgroups.perf.harness.AbstractRaftBenchmark;
 import org.jgroups.perf.CommandLineOptions;
+import org.jgroups.perf.harness.AbstractRaftBenchmark;
 import org.jgroups.perf.harness.RaftBenchmark;
+import org.jgroups.perf.harness.hyperfoil.internal.RaftBenchmarkStepBuilder;
 import org.jgroups.protocols.raft.RAFT;
 import org.jgroups.raft.RaftHandle;
 import org.jgroups.raft.StateMachine;
@@ -15,6 +16,8 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.lang.reflect.Field;
 import java.util.concurrent.ThreadLocalRandom;
+
+import io.hyperfoil.api.config.StepBuilder;
 
 /**
  * Test performance of replicating data.
@@ -67,6 +70,14 @@ public class ReplicationPerf extends AbstractRaftBenchmark {
     public RaftBenchmark asyncBenchmark(ThreadFactory tf) {
         visitRaftBeforeBenchmark();
         return new AsyncReplicationBenchmark(num_threads, raft, createTestPayload(), tf);
+    }
+
+    @Override
+    public StepBuilder<?> createBenchmarkStep() {
+        byte[] datum = new byte[data_size];
+        ThreadLocalRandom.current().nextBytes(datum);
+        return new RaftBenchmarkStepBuilder()
+                .payloadGenerator(ignore -> datum);
     }
 
     @Override

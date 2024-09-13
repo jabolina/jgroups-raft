@@ -52,7 +52,7 @@ public class RaftHyperfoilRunner implements PluginRunData {
     @Override
     public void shutdown() {
         for (RaftHyperfoilBenchmark element : elements) {
-            element.shutdown();
+            //element.shutdown();
         }
     }
 

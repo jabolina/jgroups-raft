@@ -13,10 +13,10 @@ import org.jgroups.blocks.ResponseMode;
 import org.jgroups.blocks.RpcDispatcher;
 import org.jgroups.conf.ClassConfigurator;
 import org.jgroups.perf.CommandLineOptions;
-import org.jgroups.perf.counter.HistogramUtil;
 import org.jgroups.perf.harness.hyperfoil.config.RaftPluginBuilder;
 import org.jgroups.protocols.TP;
 import org.jgroups.protocols.raft.RAFT;
+import org.jgroups.tests.DummyStateMachine;
 import org.jgroups.tests.perf.PerfUtil;
 import org.jgroups.util.Bits;
 import org.jgroups.util.DefaultThreadFactory;
@@ -26,18 +26,25 @@ import org.jgroups.util.Streamable;
 import org.jgroups.util.ThreadFactory;
 import org.jgroups.util.Util;
 
+import java.io.ByteArrayOutputStream;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import io.hyperfoil.api.config.Benchmark;
 import io.hyperfoil.api.config.BenchmarkBuilder;
+import io.hyperfoil.api.config.PhaseBuilder;
+import io.hyperfoil.api.config.StepBuilder;
+import io.hyperfoil.api.statistics.StatisticsSnapshot;
+import io.hyperfoil.core.impl.LocalSimulationRunner;
 import org.HdrHistogram.AbstractHistogram;
 import org.HdrHistogram.Histogram;
 
@@ -147,14 +154,6 @@ public abstract class AbstractRaftBenchmark implements Receiver {
 
         System.out.printf("Connecting benchmark node to cluster: '%s'%n", CLUSTER_NAME);
         channel.connect(CLUSTER_NAME);
-
-        BenchmarkBuilder benchmark = BenchmarkBuilder.builder()
-                .name("raft-benchmark")
-                .failurePolicy(Benchmark.FailurePolicy.CANCEL);
-
-        benchmark.addPlugin(RaftPluginBuilder::new)
-                .withStateMachine()
-                .withJChannel(channel);
     }
 
     public final void init() throws Throwable {
@@ -181,7 +180,7 @@ public abstract class AbstractRaftBenchmark implements Receiver {
 
     public final void eventLoop() throws Throwable {
         while (looping) {
-            String message = String.format(BASE_EVENT_LOOP, num_threads, Util.printTime(time, TimeUnit.MILLISECONDS),
+            String message = String.format(BASE_EVENT_LOOP, num_threads, Util.printTime(time, TimeUnit.SECONDS),
                     Util.printTime(timeout, TimeUnit.MILLISECONDS), print_details, print_updaters, benchmark, extendedEventLoopHeader());
             int c = Util.keyPress(message);
 
@@ -243,42 +242,42 @@ public abstract class AbstractRaftBenchmark implements Receiver {
     public final UpdateResult startTest() throws Throwable {
         System.out.printf("running for %d seconds\n", time);
 
-        try (RaftBenchmark rb = getBenchmark(benchmark)) {
-            long start = System.currentTimeMillis();
+        BenchmarkBuilder builder = BenchmarkBuilder.builder()
+                .name("raft-benchmark")
+                .failurePolicy(Benchmark.FailurePolicy.CANCEL);
 
-            rb.start();
+        builder.addPlugin(RaftPluginBuilder::new)
+                .withStateMachine(new DummyStateMachine())
+                .withJChannel(channel);
 
-            long interval = (long) ((time * 1000.0) / 10.0);
-            for (int i = 1; i <= 10; i++) {
-                Util.sleep(interval);
-                System.out.printf("%d: %s%n", i, printAverage(start, rb));
-            }
+        PhaseBuilder<?> pb = builder.addPhase(benchmark)
+                .constantRate(num_threads)
+                .duration(TimeUnit.SECONDS.toMillis(time))
+                .maxDuration(TimeUnit.SECONDS.toMillis(time))
+                .isWarmup(false);
 
-            rb.stop();
-            rb.join();
+        pb.scenario()
+                .initialSequence("replicate")
+                .stepBuilder(createBenchmarkStep())
+                .endSequence()
+                .endScenario();
 
-            long totalTime = System.currentTimeMillis() - start;
+        HashMap<String, StatisticsSnapshot> total = new HashMap<>();
+        LocalSimulationRunner runner = new LocalSimulationRunner(
+                builder.build(),
+                (phase, stepId, metric, snapshot, countDown) -> total.computeIfAbsent(phase.name() + "/" + metric, k -> new StatisticsSnapshot()).add(snapshot),
+                (phase, min, max) -> System.out.printf("Phase %s used %s - %s sessions.%n", phase, min, max),
+                (authority, tag, min, max) -> {});
 
-            Histogram avgIncrs = rb.getResults(print_updaters, avgMinMax -> print(avgMinMax, print_details));
-            if (print_updaters)
-                System.out.printf("\navg over all updaters: %s%n", print(avgIncrs, print_details));
-
-            System.out.printf("\ndone (in %s ms)%n", totalTime);
-
-            if (histogramPath != null) {
-                String fileName = String.format("histogram_%s_%s.hgrm", channel.getName(), benchmark);
-                Path filePath = Path.of(histogramPath, fileName);
-
-                System.out.printf("Storing histogram to '%s'%n", filePath.toAbsolutePath());
-                try {
-                    HistogramUtil.writeTo(avgIncrs, filePath.toFile());
-                } catch (IOException e) {
-                    System.err.printf("Failed writing histogram: %s", e);
-                }
-            }
-
-            return new UpdateResult(rb.getTotalUpdates(), totalTime, avgIncrs);
+        try {
+            runner.run();
+        } catch (Throwable t) {
+            t.printStackTrace(System.err);
         }
+
+        StatisticsSnapshot stats = total.values().stream().findFirst().orElseThrow();
+        long durationSeconds = (stats.histogram.getEndTimeStamp() - stats.histogram.getStartTimeStamp());
+        return new UpdateResult(stats.histogram.getTotalCount(), durationSeconds, stats.histogram);
     }
 
     public final void quitAll() {
@@ -343,6 +342,8 @@ public abstract class AbstractRaftBenchmark implements Receiver {
      */
     public abstract RaftBenchmark asyncBenchmark(ThreadFactory tf);
 
+    public abstract StepBuilder<?> createBenchmarkStep();
+
     /**
      * Expand the event loop with new arguments.
      *
@@ -406,6 +407,7 @@ public abstract class AbstractRaftBenchmark implements Receiver {
         System.out.println(Util.bold(String.format("Throughput: %,.2f updates/sec/node\n" +
                         "Time:       %s / update\n",
                 total_reqs_sec, print(globalHistogram, print_details))));
+        if (print_details && globalHistogram != null) System.out.println(printDetailed(globalHistogram));;
         System.out.println("\n\n");
     }
 
@@ -421,9 +423,45 @@ public abstract class AbstractRaftBenchmark implements Receiver {
     }
 
     private static String print(AbstractHistogram histogram, boolean details) {
+        if (histogram == null) return "no results";
+
         double avg = histogram.getMean();
         return details ? String.format("min/avg/max = %d/%f/%s", histogram.getMinValue(), avg, histogram.getMaxValue()) :
                 String.format("%s", Util.printTime(avg, TimeUnit.NANOSECONDS));
+    }
+
+    private static String printDetailed(AbstractHistogram histogram) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("min/avg/max = ");
+        sb.append(Util.printTime(histogram.getMinValue(), TimeUnit.NANOSECONDS)).append('/')
+                .append(Util.printTime(histogram.getMean(), TimeUnit.NANOSECONDS)).append('/')
+                .append(Util.printTime(histogram.getMaxValue(), TimeUnit.NANOSECONDS));
+
+        sb.append(System.lineSeparator());
+
+        sb.append("p50: ").append(Util.printTime(histogram.getValueAtPercentile(50), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
+        sb.append("p90: ").append(Util.printTime(histogram.getValueAtPercentile(90), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
+        sb.append("p99: ").append(Util.printTime(histogram.getValueAtPercentile(99), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
+        sb.append("p99.9: ").append(Util.printTime(histogram.getValueAtPercentile(99.9), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
+        sb.append("p99.99: ").append(Util.printTime(histogram.getValueAtPercentile(99.99), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
+        sb.append(Util.bold("max: ")).append(Util.printTime(histogram.getMaxValue(), TimeUnit.NANOSECONDS)).append(System.lineSeparator());
+        return sb.toString();
+    }
+
+    private void printStats(String phaseAndMetric, StatisticsSnapshot stats) {
+        double durationSeconds = (stats.histogram.getEndTimeStamp() - stats.histogram.getStartTimeStamp()) / 1000d;
+        System.out.println(phaseAndMetric);
+        System.out.printf("%s requests in %s s, %n", stats.histogram.getTotalCount(), durationSeconds);
+        System.out.println("                  Avg     Stdev       Max");
+        System.out.printf("Latency:    %s %s %s%n", io.hyperfoil.impl.Util.prettyPrintNanosFixed((long) stats.histogram.getMean()),
+                io.hyperfoil.impl.Util.prettyPrintNanosFixed((long) stats.histogram.getStdDeviation()),
+                io.hyperfoil.impl.Util.prettyPrintNanosFixed(stats.histogram.getMaxValue()));
+        System.out.printf("Requests/sec: %s%n", String.format("%.2f", stats.histogram.getTotalCount() / durationSeconds));
+
+        final ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        stats.histogram.outputPercentileDistribution(new PrintStream(baos, true, StandardCharsets.UTF_8), 1000.00);
+        String data = baos.toString(StandardCharsets.UTF_8);
+        System.out.printf("\nPercentile Distribution\n\n%s\n", data);
     }
 
     public static class UpdateResult implements Streamable {
@@ -453,10 +491,11 @@ public abstract class AbstractRaftBenchmark implements Receiver {
             histogram = Util.objectFromStream(in);
         }
 
+        @Override
         public String toString() {
             double totalReqsPerSec = num_updates / (total_time / 1000.0);
-            return String.format("%,.2f updates/sec (%,d updates, %s / update)", totalReqsPerSec, num_updates,
-                    Util.printTime(histogram.getMean(), TimeUnit.NANOSECONDS));
+            return String.format("%,.2f updates/sec (%,d updates, %s / update)\n%s", totalReqsPerSec, num_updates,
+                    Util.printTime(histogram.getMean(), TimeUnit.NANOSECONDS), printDetailed(histogram));
         }
     }
 }
