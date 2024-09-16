@@ -37,4 +37,6 @@ public class RaftPlugin implements Plugin {
     public PluginRunData createRunData(Benchmark benchmark, EventLoop[] eventLoops, int i) {
         return new RaftHyperfoilRunner(benchmark, eventLoops);
     }
+
+    public static final class RaftPluginConfig implements PluginConfig { }
 }

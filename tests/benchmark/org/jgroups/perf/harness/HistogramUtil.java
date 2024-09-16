@@ -1,4 +1,4 @@
-package org.jgroups.perf.counter;
+package org.jgroups.perf.harness;
 
 import org.HdrHistogram.AbstractHistogram;
 import org.HdrHistogram.AtomicHistogram;

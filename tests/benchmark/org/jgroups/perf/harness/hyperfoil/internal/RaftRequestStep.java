@@ -1,11 +1,8 @@
 package org.jgroups.perf.harness.hyperfoil.internal;
 
-import org.jgroups.perf.harness.hyperfoil.RaftHyperfoilRunner;
-import org.jgroups.raft.Options;
-import org.jgroups.raft.RaftHandle;
-
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 
 import io.hyperfoil.api.config.SLA;
 import io.hyperfoil.api.session.ResourceUtilizer;
@@ -13,22 +10,21 @@ import io.hyperfoil.api.session.Session;
 import io.hyperfoil.api.statistics.Statistics;
 import io.hyperfoil.core.metric.MetricSelector;
 import io.hyperfoil.core.steps.StatisticsStep;
-import io.hyperfoil.function.SerializableFunction;
 
-public class RaftBenchmarkStep extends StatisticsStep implements ResourceUtilizer, SLA.Provider {
+public class RaftRequestStep extends StatisticsStep implements ResourceUtilizer, SLA.Provider {
 
-    private final SerializableFunction<Session, byte[]> payloadGenerator;
     private final MetricSelector metricSelector;
     private final RaftOperationResource.Key operationKey;
+    private final Supplier<CompletableFuture<?>> method;
 
-    protected RaftBenchmarkStep(int id,
-                                RaftOperationResource.Key operationKey,
-                                MetricSelector metricSelector,
-                                SerializableFunction<Session, byte[]> payloadGenerator) {
+    protected RaftRequestStep(int id,
+                              RaftOperationResource.Key operationKey,
+                              MetricSelector metricSelector,
+                              Supplier<CompletableFuture<?>> method) {
         super(id);
         this.metricSelector = metricSelector;
         this.operationKey = operationKey;
-        this.payloadGenerator = payloadGenerator;
+        this.method = method;
     }
 
     @Override
@@ -38,18 +34,14 @@ public class RaftBenchmarkStep extends StatisticsStep implements ResourceUtilize
 
     @Override
     public boolean invoke(Session session) {
-        byte[] payload = payloadGenerator.apply(session);
-
         String metric = metricSelector.apply(null, "");
         Statistics statistics = session.statistics(id(), metric);
-        RaftHyperfoilBenchmark benchmark = RaftHyperfoilRunner.get(session);
-        RaftHandle handle = benchmark.handle();
 
         long startTimestampMs = System.currentTimeMillis();
         long startTimestampNanos = System.nanoTime();
         CompletableFuture<?> cf;
         try {
-            cf = handle.setAsync(payload, 0, payload.length, Options.DEFAULT_OPTIONS);
+            cf = method.get();
         } catch (Exception e) {
             cf = CompletableFuture.failedFuture(e);
         }

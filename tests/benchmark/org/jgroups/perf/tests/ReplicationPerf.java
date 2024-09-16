@@ -1,4 +1,4 @@
-package org.jgroups.perf.replication;
+package org.jgroups.perf.tests;
 
 import org.jgroups.annotations.Property;
 import org.jgroups.perf.CommandLineOptions;
@@ -11,12 +11,10 @@ import org.jgroups.raft.testfwk.RaftTestUtils;
 import org.jgroups.tests.DummyStateMachine;
 import org.jgroups.util.Util;
 
-import java.io.DataInput;
-import java.io.DataOutput;
 import java.lang.reflect.Field;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadLocalRandom;
-
-import io.hyperfoil.api.config.StepBuilder;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Test performance of replicating data.
@@ -44,8 +42,8 @@ public class ReplicationPerf extends AbstractRaftBenchmark {
         }
     }
 
+    private final AtomicReference<byte[]> payload = new AtomicReference<>(null);
     private final RaftHandle raft;
-    private final CounterStateMachine csm;
 
     @Property
     protected int data_size = 526;
@@ -55,20 +53,23 @@ public class ReplicationPerf extends AbstractRaftBenchmark {
 
     public ReplicationPerf(CommandLineOptions cmd) throws Throwable {
         super(cmd);
-        this.csm = new CounterStateMachine();
-        this.raft = new RaftHandle(channel, csm);
+        this.raft = new RaftHandle(channel, new DummyStateMachine());
     }
 
     @Override
-    public StepBuilder<?> createBenchmarkStep() {
+    public RaftBenchmarkStepBuilder createBenchmarkStep() {
         visitRaftBeforeBenchmark();
-        return new RaftBenchmarkStepBuilder()
-                .payloadGenerator(ignore -> createTestPayload());
+        payload.set(createTestPayload());
+        return new RaftBenchmarkStepBuilder().withMethod(this::benchmarkOperation);
     }
 
-    @Override
-    public StateMachine getBenchmarkStateMachine() {
-        return new DummyStateMachine();
+    private CompletableFuture<?> benchmarkOperation() {
+        byte[] datum = payload.get();
+        try {
+            return raft.setAsync(datum, 0, datum.length);
+        } catch (Exception e) {
+            return CompletableFuture.failedFuture(e);
+        }
     }
 
     @Override
@@ -110,22 +111,5 @@ public class ReplicationPerf extends AbstractRaftBenchmark {
         byte[] payload = new byte[data_size];
         ThreadLocalRandom.current().nextBytes(payload);
         return payload;
-    }
-
-    private static class CounterStateMachine implements StateMachine {
-        private long updates;
-
-
-        @Override
-        public byte[] apply(byte[] data, int offset, int length, boolean serialize_response) throws Exception {
-            updates++;
-            return null;
-        }
-
-        @Override
-        public void readContentFrom(DataInput in) throws Exception { }
-
-        @Override
-        public void writeContentTo(DataOutput out) throws Exception { }
     }
 }

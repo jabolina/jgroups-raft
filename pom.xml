@@ -28,7 +28,7 @@
         <leveldbjni.version>1.8</leveldbjni.version>
         <log4j.version>2.24.1</log4j.version>
         <jmh.version>1.37</jmh.version>
-        <hyperfoil.version>0.27-SNAPSHOT</hyperfoil.version>
+        <hyperfoil.version>0.26</hyperfoil.version>
         <version.metainf-services>1.8</version.metainf-services>
         <mashona.version>1.1.0</mashona.version>
 

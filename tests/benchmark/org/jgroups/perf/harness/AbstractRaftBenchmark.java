@@ -13,16 +13,14 @@ import org.jgroups.blocks.ResponseMode;
 import org.jgroups.blocks.RpcDispatcher;
 import org.jgroups.conf.ClassConfigurator;
 import org.jgroups.perf.CommandLineOptions;
-import org.jgroups.perf.counter.HistogramUtil;
 import org.jgroups.perf.harness.hyperfoil.config.RaftPluginBuilder;
+import org.jgroups.perf.harness.hyperfoil.internal.RaftBenchmarkStepBuilder;
 import org.jgroups.protocols.raft.RAFT;
-import org.jgroups.raft.StateMachine;
 import org.jgroups.tests.perf.PerfUtil;
 import org.jgroups.util.Bits;
 import org.jgroups.util.Rsp;
 import org.jgroups.util.RspList;
 import org.jgroups.util.Streamable;
-import org.jgroups.util.ThreadFactory;
 import org.jgroups.util.Util;
 
 import java.io.DataInput;
@@ -38,7 +36,6 @@ import java.util.concurrent.TimeUnit;
 import io.hyperfoil.api.config.Benchmark;
 import io.hyperfoil.api.config.BenchmarkBuilder;
 import io.hyperfoil.api.config.PhaseBuilder;
-import io.hyperfoil.api.config.StepBuilder;
 import io.hyperfoil.api.statistics.StatisticsSnapshot;
 import io.hyperfoil.core.impl.LocalSimulationRunner;
 import org.HdrHistogram.AbstractHistogram;
@@ -53,15 +50,19 @@ import org.HdrHistogram.Histogram;
  * <p>
  * Classes extending the harness have a few methods available to extend the configuration:
  * <ul>
- *     <li>{@link #syncBenchmark(ThreadFactory)} and {@link #asyncBenchmark(ThreadFactory)}: Create the synchronous and
- *          asynchronous instances for running the benchmark, respectively;</li>
  *     <li>{@link #extendedEventLoop(int)}: Extend the event loop to parse additional options;</li>
  *     <li>{@link #extendedEventLoopHeader()}: Extend the event loop options message;</li>
  *     <li>{@link #clear()}: Clear resources created by the benchmark at exit.</li>
  * </ul>
  * </p>
  *
+ * <p>
+ * Most importantly, the harness is backed by Hyperfoil [1]. Therefore, subclasses must provide a step to run with
+ * Hyperfoil. The clustering will start the benchmark on every node, triggering a local execution of the benchmark.
+ * </p>
+ *
  * @author José Bolina
+ * @see <a href="https://hyperfoil.io">[1] Hyperfoil</a>
  */
 public abstract class AbstractRaftBenchmark implements Receiver {
 
@@ -203,7 +204,7 @@ public abstract class AbstractRaftBenchmark implements Receiver {
         clear();
     }
 
-    public final UpdateResult startTest() throws Throwable {
+    public UpdateResult startTest() {
         System.out.printf("running for %d seconds\n", time);
 
         BenchmarkBuilder builder = BenchmarkBuilder.builder()
@@ -211,10 +212,7 @@ public abstract class AbstractRaftBenchmark implements Receiver {
                 .threads(Runtime.getRuntime().availableProcessors())
                 .failurePolicy(Benchmark.FailurePolicy.CANCEL);
 
-        StateMachine sm = getBenchmarkStateMachine();
-        builder.addPlugin(RaftPluginBuilder::new)
-                .withStateMachine(sm)
-                .withJChannel(channel);
+        builder.addPlugin(RaftPluginBuilder::new);
 
         PhaseBuilder<?> pb = builder.addPhase("benchmark")
                 .constantRate(req_per_sec)
@@ -223,20 +221,19 @@ public abstract class AbstractRaftBenchmark implements Receiver {
                 .isWarmup(false);
 
         pb.scenario()
-                .initialSequence("replicate")
+                .initialSequence(this.getClass().getSimpleName())
                 .stepBuilder(createBenchmarkStep())
                 .endSequence()
                 .endScenario();
 
         final StatisticsSnapshot stats = new StatisticsSnapshot();
-        Benchmark b = builder.build();
-        LocalSimulationRunner runner = new LocalSimulationRunner(
-                b,
-                (phase, stepId, metric, snapshot, countDown) -> stats.add(snapshot),
-                (phase, min, max) -> System.out.printf("Phase %s used %s - %s sessions.%n", phase, min, max),
-                (authority, tag, min, max) -> {});
-
         try {
+            Benchmark b = builder.build();
+            LocalSimulationRunner runner = new LocalSimulationRunner(
+                    b,
+                    (phase, stepId, metric, snapshot, countDown) -> stats.add(snapshot),
+                    (phase, min, max) -> System.out.printf("Phase %s used %s - %s sessions.%n", phase, min, max),
+                    (authority, tag, min, max) -> {});
             runner.run();
         } catch (Throwable t) {
             t.printStackTrace(System.err);
@@ -244,7 +241,7 @@ public abstract class AbstractRaftBenchmark implements Receiver {
         }
 
         if (histogramPath != null) {
-            String fileName = String.format("histogram_%s_%s.hgrm", channel.getName(), sm.getClass().getSimpleName());
+            String fileName = String.format("histogram_%s.hgrm", channel.getName());
             Path filePath = Path.of(histogramPath, fileName);
 
             System.out.printf("Storing histogram to '%s'%n", filePath.toAbsolutePath());
@@ -255,11 +252,10 @@ public abstract class AbstractRaftBenchmark implements Receiver {
             }
         }
 
-        long durationSeconds = (stats.histogram.getEndTimeStamp() - stats.histogram.getStartTimeStamp());
-        System.out.printf("Run for %d sec%n", durationSeconds);
-        System.out.printf("Use %d threads%n", b.defaultThreads());
+        long durationMs = (stats.histogram.getEndTimeStamp() - stats.histogram.getStartTimeStamp());
+        System.out.printf("Run for %d sec%n", durationMs);
 
-        return new UpdateResult(stats.histogram.getTotalCount(), durationSeconds, stats.histogram);
+        return new UpdateResult(stats.histogram.getTotalCount(), stats.errors(), durationMs, stats.histogram);
     }
 
     public final void quitAll() {
@@ -298,9 +294,12 @@ public abstract class AbstractRaftBenchmark implements Receiver {
         Util.close(channel);
     }
 
-    public abstract StepBuilder<?> createBenchmarkStep();
-
-    public abstract StateMachine getBenchmarkStateMachine();
+    /**
+     * Creates a step to run with Hyperfoil.
+     *
+     * @return An instance of {@link RaftBenchmarkStepBuilder} with the method to benchmark.
+     */
+    public abstract RaftBenchmarkStepBuilder createBenchmarkStep();
 
     /**
      * Expand the event loop with new arguments.
@@ -398,13 +397,15 @@ public abstract class AbstractRaftBenchmark implements Receiver {
 
     public static class UpdateResult implements Streamable {
         protected long num_updates;
+        private long errors;
         protected long total_time;     // in ms
         protected Histogram histogram; // in ns
 
         public UpdateResult() { }
 
-        public UpdateResult(long num_updates, long total_time, Histogram histogram) {
+        public UpdateResult(long num_updates, long errors, long total_time, Histogram histogram) {
             this.num_updates = num_updates;
+            this.errors = errors;
             this.total_time = total_time;
             this.histogram = histogram;
         }
@@ -412,6 +413,7 @@ public abstract class AbstractRaftBenchmark implements Receiver {
         @Override
         public void writeTo(DataOutput out) throws IOException {
             Bits.writeLongCompressed(num_updates, out);
+            Bits.writeLongCompressed(errors, out);
             Bits.writeLongCompressed(total_time, out);
             Util.objectToStream(histogram, out);
         }
@@ -419,6 +421,7 @@ public abstract class AbstractRaftBenchmark implements Receiver {
         @Override
         public void readFrom(DataInput in) throws IOException, ClassNotFoundException {
             num_updates = Bits.readLongCompressed(in);
+            errors = Bits.readLongCompressed(in);
             total_time = Bits.readLongCompressed(in);
             histogram = Util.objectFromStream(in);
         }
@@ -426,8 +429,8 @@ public abstract class AbstractRaftBenchmark implements Receiver {
         @Override
         public String toString() {
             double totalReqsPerSec = num_updates / (total_time / 1000.0);
-            return String.format("%,.2f updates/sec (%,d updates, %s / update)\n%s", totalReqsPerSec, num_updates,
-                    Util.printTime(histogram.getMean(), TimeUnit.NANOSECONDS), printDetailed(histogram));
+            return String.format("%,.2f updates/sec (%,d updates, %s / update, %d errors)\n%s", totalReqsPerSec, num_updates,
+                    Util.printTime(histogram.getMean(), TimeUnit.NANOSECONDS), errors, printDetailed(histogram));
         }
     }
 }
