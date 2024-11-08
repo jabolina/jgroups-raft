@@ -67,6 +67,9 @@
         <!-- Utilized by Asciidoctor to set the generation date. -->
         <asciidoctorj.diagram.versio>2.2.5</asciidoctorj.diagram.versio>
         <maven.build.timestamp.format>yyyy-MM-dd HH</maven.build.timestamp.format>
+
+        <!-- Checkstyle -->
+        <version.puppycrawl>10.20.1</version.puppycrawl>
     </properties>
 
     <organization>
@@ -239,8 +242,13 @@
     </dependencies>
 
     <build>
-        <sourceDirectory>src</sourceDirectory>
         <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <includes>
+                    <include>checkstyle.xml</include>
+                </includes>
+            </resource>
             <resource>
                 <directory>conf</directory>
                 <includes>
@@ -281,6 +289,37 @@
                     <nexusUrl>${nexus.server.url}</nexusUrl>
                     <serverId>${nexus.server.id}</serverId>
                     <autoReleaseAfterClose>true</autoReleaseAfterClose>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <artifactId>maven-checkstyle-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>checkstyle</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <dependencies>
+                    <dependency>
+                        <groupId>com.puppycrawl.tools</groupId>
+                        <artifactId>checkstyle</artifactId>
+                        <version>${version.puppycrawl}</version>
+                    </dependency>
+                </dependencies>
+                <configuration>
+                    <configLocation>src/main/resources/checkstyle.xml</configLocation>
+                    <consoleOutput>true</consoleOutput>
+                    <failsOnError>true</failsOnError>
+                    <violationSeverity>error</violationSeverity>
+                    <includeTestSourceDirectory>true</includeTestSourceDirectory>
+                    <sourceDirectories>
+                        <sourceDirectory>${project.build.sourceDirectory}</sourceDirectory>
+                    </sourceDirectories>
+                    <linkXRef>false</linkXRef>
                 </configuration>
             </plugin>
 
@@ -468,6 +507,12 @@
 
         <pluginManagement>
             <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-checkstyle-plugin</artifactId>
+                    <version>3.3.1</version>
+                </plugin>
+
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-clean-plugin</artifactId>
