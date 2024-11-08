@@ -4,6 +4,7 @@ import org.jgroups.protocols.raft.CLIENT;
 import org.jgroups.util.Util;
 
 import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -12,10 +13,11 @@ import java.util.concurrent.CompletableFuture;
  * @author Bela Ban
  * @since  0.2
  */
-public class Client {
+public final class Client {
 
+    private Client() { }
 
-    protected static void start(InetAddress dest, int port, String add_server, String remove_server) throws Throwable {
+    private static void start(InetAddress dest, int port, String add_server, String remove_server) {
         try(ClientStub stub=new ClientStub(dest, port).start()) {
             CLIENT.RequestType type=add_server != null? CLIENT.RequestType.add_server : CLIENT.RequestType.remove_server;
             byte[] buf=Util.stringToBytes(add_server != null? add_server : remove_server);
@@ -23,12 +25,14 @@ public class Client {
             byte[] rsp=cf.join();
             Object response=Util.objectFromByteBuffer(rsp);
             if(response instanceof Throwable)
-                throw (Throwable)response;
+                throw new RuntimeException((Throwable) response);
             System.out.printf(String.valueOf(response));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 
-    public static void main(String[] args) throws Throwable {
+    public static void main(String[] args) throws UnknownHostException {
         InetAddress dest=InetAddress.getLocalHost();
         int         port=1965;
         String      add_server=null, remove_server=null;
@@ -62,15 +66,10 @@ public class Client {
             return;
         }
 
-        try {
-            Client.start(dest, port, add_server, remove_server);
-        } catch (Throwable t) {
-            t.printStackTrace();
-            System.exit(1);
-        }
+        Client.start(dest, port, add_server, remove_server);
     }
 
-    protected static void help() {
+    private static void help() {
         System.out.println("Client [-dest <destination address>] [-port <port>] (-add <server> | -remove <server>)");
     }
 }

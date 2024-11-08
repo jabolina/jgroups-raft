@@ -40,7 +40,9 @@
         <module name="MutableException" />
         <module name="CovariantEquals" />
         <module name="EqualsAvoidNull" />
-        <module name="IllegalCatch"/>
+
+        <!-- In many places we have checked Throwable in the method -->
+        <!--<module name="IllegalCatch"/>-->
         <!--<property name="illegalClassNames" value="java.lang.Throwable, java.lang.RuntimeException" />-->
         <!--</module>-->
         <!--&lt;!&ndash; I wish we could enable this one &ndash;&gt;-->

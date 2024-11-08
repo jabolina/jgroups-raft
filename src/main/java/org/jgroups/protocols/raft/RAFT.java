@@ -640,9 +640,9 @@ public class RAFT extends Protocol implements Settable, DynamicMembership {
     /**
      * Triggers a flush of the entries to the given member.
      *
-     * @param member: The not-null member address to send the entries.
-     * @throws IllegalStateException: Thrown in case the current node is <b>not</b> the leader.
-     * @throws NullPointerException: Thrown in case the {@param member} is null.
+     * @param member The not-null member address to send the entries.
+     * @throws IllegalStateException Thrown in case the current node is <b>not</b> the leader.
+     * @throws NullPointerException Thrown in case the {@param member} is null.
      */
     public void flushCommitTable(Address member) {
         if (!isLeader()) throw new IllegalStateException("Currently not the leader, should be " + leader());
@@ -1316,15 +1316,13 @@ public class RAFT extends Protocol implements Settable, DynamicMembership {
         return props;
     }
 
-
-    public interface RoleChange {
-        void roleChanged(Role role);
-    }
-
     protected void computeMajority() {
         majority=(internal_state.getMembers().size() / 2) + 1;
     }
 
+    public interface RoleChange {
+        void roleChanged(Role role);
+    }
 
     protected static class Request {
 

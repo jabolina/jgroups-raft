@@ -134,8 +134,8 @@ public class ELECTION2 extends BaseElection {
      * the node replies with its current known leader address. This is because the sender is not interested in electing
      * itself. The sender is checking if a cluster-wide election round should be started.
      *
-     * @param message: The message received.
-     * @param hdr: The message header.
+     * @param message The message received.
+     * @param hdr The message header.
      */
     private void handlePreVoteRequest(Message message, PreVoteRequest hdr) {
         sendPreVoteResponse(message.getSrc());
@@ -189,11 +189,11 @@ public class ELECTION2 extends BaseElection {
          * Once all responses are collected and there is still a majority, the responses are parsed to verify if an
          * election phase should start.
          *
-         * @param sender: The response sender.
-         * @param hdr: The response message.
+         * @param sender The response sender.
+         * @param hdr The response message.
          */
         public void includeResponse(Address sender, PreVoteResponse hdr) {
-            preVotingResponses.add(sender, hdr);;
+            preVotingResponses.add(sender, hdr);
 
             int majority = raft.majority();
             if (preVotingResponses.hasAllResponses() && preVotingResponses.numberOfValidResponses() >= majority) {

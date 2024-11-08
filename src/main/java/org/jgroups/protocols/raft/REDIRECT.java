@@ -1,6 +1,12 @@
 package org.jgroups.protocols.raft;
 
-import org.jgroups.*;
+import org.jgroups.Address;
+import org.jgroups.BytesMessage;
+import org.jgroups.Event;
+import org.jgroups.Global;
+import org.jgroups.Header;
+import org.jgroups.Message;
+import org.jgroups.View;
 import org.jgroups.annotations.MBean;
 import org.jgroups.conf.ClassConfigurator;
 import org.jgroups.raft.Options;
