@@ -75,7 +75,7 @@ jobs:
           MVN_EXIT=$?
 
           kill "$WATCHDOG_PID" 2>/dev/null
-          wait "$WATCHDOG_PID" 2>/dev/null
+          wait "$WATCHDOG_PID" 2>/dev/null || true
 
           exit "$MVN_EXIT"
 
