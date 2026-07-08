@@ -44,7 +44,8 @@ jobs:
         shell: bash
         run: |
           if [[ "$RUNNER_OS" != "Linux" ]]; then
-            mvn --batch-mode --no-transfer-progress package -Dgroups=functional -DjgroupsTestsParallelThreads=2
+            mvn --batch-mode --no-transfer-progress package -Dgroups=functional -DjgroupsTestsParallelThreads=2 \
+              -Dorg.jgroups.test.traces="org.jgroups.protocols.raft.ELECTION2"
             exit $?
           fi
 
